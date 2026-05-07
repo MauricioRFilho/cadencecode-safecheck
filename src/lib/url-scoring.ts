@@ -1,3 +1,9 @@
+import {
+  BRAND_IMPERSONATION_RULES,
+  BR_TRUSTED_DOMAIN_SUFFIXES,
+  BR_TRUSTED_EXACT_DOMAINS,
+} from "@/lib/br-threat-intel";
+
 export type RiskLevel = "low" | "medium" | "high";
 
 export type ScoreFactor = {
@@ -22,6 +28,29 @@ type UrlHeuristic = {
   when: (value: URL, rawInput: string) => boolean;
   details: (value: URL) => string;
 };
+
+function isTrustedBrDomain(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (BR_TRUSTED_EXACT_DOMAINS.includes(host)) return true;
+  return BR_TRUSTED_DOMAIN_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
+function hasLikelyBrBrandImpersonation(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  const labels = host.split(".");
+  const root = labels.slice(-2).join(".");
+
+  for (const [brandKey, officialDomains] of Object.entries(
+    BRAND_IMPERSONATION_RULES,
+  )) {
+    if (!host.includes(brandKey)) continue;
+    if (!officialDomains.some((official) => host === official || root === official)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 const SUSPICIOUS_TLDS = new Set([
   "zip",
@@ -105,6 +134,21 @@ const heuristics: UrlHeuristic[] = [
     details: () =>
       "Quantidade elevada de parâmetros pode indicar rastreamento ou ofuscação.",
   },
+  {
+    code: "br_brand_impersonation",
+    label: "Possível impersonação de marca/órgão brasileiro",
+    impact: 30,
+    when: (url) => hasLikelyBrBrandImpersonation(url.hostname),
+    details: () =>
+      "Domínio cita marca ou órgão nacional, mas não corresponde ao domínio oficial esperado.",
+  },
+  {
+    code: "trusted_br_domain",
+    label: "Domínio oficial brasileiro reconhecido",
+    impact: -10,
+    when: (url) => isTrustedBrDomain(url.hostname),
+    details: () => "O domínio corresponde a padrão oficial brasileiro conhecido.",
+  },
 ];
 
 function toRiskLevel(score: number): RiskLevel {
@@ -126,6 +170,12 @@ function buildRecommendations(factors: ScoreFactor[], score: number): string[] {
 
   if (factors.some((f) => f.code === "credential_bait_words")) {
     recommendations.push("Confirme no canal oficial da empresa antes de prosseguir.");
+  }
+
+  if (factors.some((f) => f.code === "br_brand_impersonation")) {
+    recommendations.push(
+      "No Brasil, confira se órgãos públicos usam domínio .gov.br e bancos usam domínio oficial da instituição.",
+    );
   }
 
   if (score < 50) {
